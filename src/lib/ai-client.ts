@@ -261,6 +261,48 @@ export async function chatWithFallback(
   };
 }
 
+async function generateJsonWithFallback<T>(
+  prompt: string,
+  validate: (data: unknown) => data is T
+): Promise<{ data: T; model: 'minimax' | 'gemini' } | null> {
+  const attempts: Array<{ model: 'minimax' | 'gemini'; call: () => Promise<string> }> = [];
+
+  if (MINIMAX_API_KEY) {
+    attempts.push({
+      model: 'minimax',
+      call: () =>
+        callMinimaxAPI(
+          [
+            { role: 'system', content: 'You must respond with ONLY valid JSON, no markdown or explanation.' },
+            { role: 'user', content: prompt },
+          ],
+          'MiniMax-Text-01'
+        ),
+    });
+  }
+
+  if (GEMINI_API_KEY) {
+    attempts.push({ model: 'gemini', call: () => callGeminiAPI([{ role: 'user', content: prompt }]) });
+  }
+
+  for (const { model, call } of attempts) {
+    try {
+      const raw = await call();
+      const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+
+      if (validate(parsed)) {
+        return { data: parsed, model };
+      }
+      console.warn(`${model} returned invalid data structure`);
+    } catch (e) {
+      console.error(`${model} generation failed:`, e);
+    }
+  }
+
+  return null;
+}
+
 function validateOverviewData(data: unknown): data is StartupOverview {
   if (typeof data !== 'object' || data === null) return false;
   const d = data as Record<string, unknown>;
@@ -330,85 +372,8 @@ Return ONLY this exact JSON structure with no markdown:
     oneLinePitch: `${input.name} helps users achieve more with less effort`
   };
 
-  if (MINIMAX_API_KEY) {
-    try {
-      const response = await fetch(MINIMAX_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'MiniMax-Text-01',
-          messages: [
-            { role: 'system', content: 'You must respond with ONLY valid JSON, no markdown or explanation.' },
-            { role: 'user', content: prompt }
-          ],
-          temperature: 0.7,
-          max_tokens: 1024,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-
-        if (content) {
-          try {
-            const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-
-            if (validateOverviewData(parsed)) {
-              return { data: parsed, model: 'minimax' };
-            } else {
-              console.warn('MiniMax returned invalid overview data structure');
-            }
-          } catch (parseErr) {
-            console.error('Failed to parse MiniMax overview response:', parseErr);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('MiniMax overview generation failed:', e);
-    }
-  }
-
-  if (GEMINI_API_KEY) {
-    try {
-      const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-      const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (text) {
-          try {
-            const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-
-            if (validateOverviewData(parsed)) {
-              return { data: parsed, model: 'gemini' };
-            } else {
-              console.warn('Gemini returned invalid overview data structure');
-            }
-          } catch (parseErr) {
-            console.error('Failed to parse Gemini overview response:', parseErr);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Gemini overview generation failed:', e);
-    }
-  }
-
-  return { data: fallbackData, model: 'fallback' };
+  const result = await generateJsonWithFallback(prompt, validateOverviewData);
+  return result ?? { data: fallbackData, model: 'fallback' };
 }
 
 export async function generateProductSpecWithFallback(
@@ -475,83 +440,6 @@ Return ONLY this exact JSON structure with no markdown:
     scalingConsiderations: 'Consider microservices architecture and CDN for assets'
   };
 
-  if (MINIMAX_API_KEY) {
-    try {
-      const response = await fetch(MINIMAX_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${MINIMAX_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'MiniMax-Text-01',
-          messages: [
-            { role: 'system', content: 'You must respond with ONLY valid JSON, no markdown or explanation.' },
-            { role: 'user', content: prompt }
-          ],
-          temperature: 0.7,
-          max_tokens: 1024,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const content = data.choices?.[0]?.message?.content;
-
-        if (content) {
-          try {
-            const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-
-            if (validateProductSpecData(parsed)) {
-              return { data: parsed, model: 'minimax' };
-            } else {
-              console.warn('MiniMax returned invalid product spec data structure');
-            }
-          } catch (parseErr) {
-            console.error('Failed to parse MiniMax product spec response:', parseErr);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('MiniMax product spec generation failed:', e);
-    }
-  }
-
-  if (GEMINI_API_KEY) {
-    try {
-      const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-      const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }]
-        })
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (text) {
-          try {
-            const cleaned = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            const parsed = JSON.parse(cleaned);
-
-            if (validateProductSpecData(parsed)) {
-              return { data: parsed, model: 'gemini' };
-            } else {
-              console.warn('Gemini returned invalid product spec data structure');
-            }
-          } catch (parseErr) {
-            console.error('Failed to parse Gemini product spec response:', parseErr);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Gemini product spec generation failed:', e);
-    }
-  }
-
-  return { data: fallbackData, model: 'fallback' };
+  const result = await generateJsonWithFallback(prompt, validateProductSpecData);
+  return result ?? { data: fallbackData, model: 'fallback' };
 }
